@@ -37,7 +37,15 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
-#define RILD_SOCKET_NAME       "rild"
+//TODO: config
+#define RILD_SOCKET_NAME        "rild"
+#define RILD_SOCKET_NAME1       "rild1"
+const char *RILD_SOCKET_NAMES[] = {
+  RILD_SOCKET_NAME,
+  RILD_SOCKET_NAME1,
+};
+const int NUM_RILD = sizeof(RILD_SOCKET_NAMES) / sizeof(char*);
+
 #define RILPROXY_SOCKET_NAME   "rilproxy"
 #define RILPROXYD_SOCKET_NAME  "rilproxyd"
 #define RILPROXYD_TRIGGER_FILE "/data/local/rilproxyd"
@@ -72,6 +80,7 @@ void switchUser() {
 
 static int
 writeToSocket(int fd, const void *buffer, size_t len) {
+  LOGD("writeToSocket len=%d", len);
   size_t write_offset = 0;
   const uint8_t *to_write;
 
@@ -97,8 +106,8 @@ writeToSocket(int fd, const void *buffer, size_t len) {
 }
 
 int main(int argc, char **argv) {
-
-  int rild_rw;
+  //TODO add compile option for Multi-SIM
+  int rild_rw[NUM_RILD];
   int rilproxy_conn;
   int ret;
   char* rilproxy_socket;
@@ -172,41 +181,51 @@ int main(int argc, char **argv) {
     LOGD("Socket connected");
     connected = 1;
 
-    while(1) {
-      LOGD("Connecting to socket %s\n", RILD_SOCKET_NAME);
-      rild_rw = socket_local_client(
-        RILD_SOCKET_NAME,
-        ANDROID_SOCKET_NAMESPACE_RESERVED,
-        SOCK_STREAM );
-      if (rild_rw >= 0) {
-        break;
+    int i;
+    for (i = 0; i < NUM_RILD; i++) {
+      while(1) {
+        LOGD("Connecting to socket %s\n", RILD_SOCKET_NAMES[i]);
+        rild_rw[i] = socket_local_client(
+          RILD_SOCKET_NAMES[i],
+          ANDROID_SOCKET_NAMESPACE_RESERVED,
+          SOCK_STREAM );
+        if (rild_rw[i] >= 0) {
+          break;
+        }
+        LOGE("Could not connect to %s socket, retrying: %s\n",
+             RILD_SOCKET_NAMES[i], strerror(errno));
+        sleep(1);
       }
-      LOGE("Could not connect to %s socket, retrying: %s\n",
-           RILD_SOCKET_NAME, strerror(errno));
-      sleep(1);
+      LOGD("Connected to socket %s\n", RILD_SOCKET_NAMES[i]);
     }
-    LOGD("Connected to socket %s\n", RILD_SOCKET_NAME);
-    char data[1024];
 
-    struct pollfd fds[2];
+    char data[1024];
+    struct pollfd fds[NUM_RILD + 1];
     fds[0].fd = rilproxy_rw;
     fds[0].events = POLLIN;
     fds[0].revents = 0;
-    fds[1].fd = rild_rw;
-    fds[1].events = POLLIN;
-    fds[1].revents = 0;
 
+    for (i = 0; i < NUM_RILD; i++) {
+      fds[i + 1].fd = rild_rw[i];
+      fds[i + 1].events = POLLIN;
+      fds[i + 1].revents = 0;
+    }
+
+    //TODO 'connected' condition for all rilds
     while(connected)
     {
-      poll(fds, 2, -1);
+      poll(fds, NUM_RILD + 1, -1);
       if(fds[0].revents > 0)
       {
+        LOGD("events in fds[0]");
         fds[0].revents = 0;
         while(1)
         {
           ret = read(rilproxy_rw, data, 1024);
           if(ret > 0) {
-            writeToSocket(rild_rw, data, ret);
+            LOGD("rilproxy ret = %d", ret);
+            int id = data[0];
+            writeToSocket(rild_rw[id], &data[1], ret - 1); // -1 for slotId
           }
           else if (ret <= 0)
           {
@@ -220,21 +239,26 @@ int main(int argc, char **argv) {
           }
         }
       }
-      if(fds[1].revents > 0)
-      {
-        fds[1].revents = 0;
-        while(1) {
-          ret = read(rild_rw, data, 1024);
-          if(ret > 0) {
-            writeToSocket(rilproxy_rw, data, ret);
-          }
-          else if (ret <= 0) {
-            LOGE("Failed to read from rild socket, closing...");
-            connected = 0;
-            break;
-          }
-          if(ret < 1024) {
-            break;
+      for (i = 0; i < NUM_RILD; i++) {
+        if(fds[i + 1].revents > 0)
+        {
+          LOGD("events in fds[%d]", i+1);
+          fds[i + 1].revents = 0;
+          while(1) {
+            data[0] = i; // Attach slotId to data.
+            ret = read(rild_rw[i], &data[1], 1024);
+            LOGD("rild_rw %d ret = %d", i, ret);
+            if(ret > 0) {
+              writeToSocket(rilproxy_rw, data, ret + 1); // +1 for slotId
+            }
+            else if (ret <= 0) {
+              LOGE("Failed to read from rild %d socket, closing...", i);
+              connected = 0;
+              break;
+            }
+            if(ret < 1024) {
+              break;
+            }
           }
         }
       }
