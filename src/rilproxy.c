@@ -223,8 +223,9 @@ int main(int argc, char **argv) {
         {
           ret = read(rilproxy_rw, data, 1024);
           if(ret > 0) {
-            LOGD("rilproxy ret = %d", ret);
             int id = data[0];
+            //TODO data[1]
+            LOGD("rilproxy ret = %d data[0]=%d, data[1]=%d", ret, data[0], data[1]);
             writeToSocket(rild_rw[id], &data[1], ret - 1); // -1 for slotId
           }
           else if (ret <= 0)
@@ -246,10 +247,15 @@ int main(int argc, char **argv) {
           fds[i + 1].revents = 0;
           while(1) {
             data[0] = i; // Attach slotId to data.
+//            data[1] = 0; // Attach slotId to data. TODO
             ret = read(rild_rw[i], &data[1], 1024);
             LOGD("rild_rw %d ret = %d", i, ret);
             if(ret > 0) {
-              writeToSocket(rilproxy_rw, data, ret + 1); // +1 for slotId
+              int j;
+              for (j = 1; j <= ret; j++) {
+                LOGD("data[%d]=%d",j,data[j]);
+              }
+              writeToSocket(rilproxy_rw, data, ret + 1); // +1 for slotId TODO
             }
             else if (ret <= 0) {
               LOGE("Failed to read from rild %d socket, closing...", i);
