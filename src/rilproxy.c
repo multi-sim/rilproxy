@@ -37,7 +37,7 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
-//TODO: config
+//TODO: platform-specific
 #define RILD_SOCKET_NAME        "rild"
 #define RILD_SOCKET_NAME1       "rild1"
 const char *RILD_SOCKET_NAMES[] = {
@@ -64,6 +64,9 @@ const int NUM_RILD = sizeof(RILD_SOCKET_NAMES) / sizeof(char*);
 #include <utils/Log.h>
 #include <cutils/sockets.h>
 
+static const int INDEX_SIZE = 1;
+static const int DATA_SIZE = 4;
+static const int HEADER_SIZE = 5; // INDEX_SIZE + DATA_SIZE
 
 void switchUser() {
   prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0);
@@ -80,7 +83,6 @@ void switchUser() {
 
 static int
 writeToSocket(int fd, const void *buffer, size_t len) {
-  LOGD("writeToSocket len=%d", len);
   size_t write_offset = 0;
   const uint8_t *to_write;
 
@@ -106,7 +108,6 @@ writeToSocket(int fd, const void *buffer, size_t len) {
 }
 
 int main(int argc, char **argv) {
-  //TODO add compile option for Multi-SIM
   int rild_rw[NUM_RILD];
   int rilproxy_conn;
   int ret;
@@ -188,7 +189,7 @@ int main(int argc, char **argv) {
         rild_rw[i] = socket_local_client(
           RILD_SOCKET_NAMES[i],
           ANDROID_SOCKET_NAMESPACE_RESERVED,
-          SOCK_STREAM );
+          SOCK_STREAM);
         if (rild_rw[i] >= 0) {
           break;
         }
@@ -199,7 +200,7 @@ int main(int argc, char **argv) {
       LOGD("Connected to socket %s\n", RILD_SOCKET_NAMES[i]);
     }
 
-    char data[1024];
+    char data[1024 + HEADER_SIZE];
     struct pollfd fds[NUM_RILD + 1];
     fds[0].fd = rilproxy_rw;
     fds[0].events = POLLIN;
@@ -217,16 +218,13 @@ int main(int argc, char **argv) {
       poll(fds, NUM_RILD + 1, -1);
       if(fds[0].revents > 0)
       {
-        LOGD("events in fds[0]");
         fds[0].revents = 0;
         while(1)
         {
-          ret = read(rilproxy_rw, data, 1024);
+          ret = read(rilproxy_rw, data, 1024 + INDEX_SIZE);
           if(ret > 0) {
-            int id = data[0];
-            //TODO data[1]
-            LOGD("rilproxy ret = %d data[0]=%d, data[1]=%d", ret, data[0], data[1]);
-            writeToSocket(rild_rw[id], &data[1], ret - 1); // -1 for slotId
+            int index = data[0];
+            writeToSocket(rild_rw[index], &data[1], ret - 1); // -1 for index
           }
           else if (ret <= 0)
           {
@@ -243,19 +241,16 @@ int main(int argc, char **argv) {
       for (i = 0; i < NUM_RILD; i++) {
         if(fds[i + 1].revents > 0)
         {
-          LOGD("events in fds[%d]", i+1);
           fds[i + 1].revents = 0;
           while(1) {
-            data[0] = i; // Attach slotId to data.
-//            data[1] = 0; // Attach slotId to data. TODO
-            ret = read(rild_rw[i], &data[1], 1024);
-            LOGD("rild_rw %d ret = %d", i, ret);
+            data[0] = i; // Attach index to data.
+            ret = read(rild_rw[i], &data[HEADER_SIZE], 1024);
             if(ret > 0) {
-              int j;
-              for (j = 1; j <= ret; j++) {
-                LOGD("data[%d]=%d",j,data[j]);
-              }
-              writeToSocket(rilproxy_rw, data, ret + 1); // +1 for slotId TODO
+              data[1] = (ret >> 24) & 0xff;
+              data[2] = (ret >> 16) & 0xff;
+              data[3] = (ret >> 8) & 0xff;
+              data[4] =  ret & 0xff;
+              writeToSocket(rilproxy_rw, data, ret + HEADER_SIZE);
             }
             else if (ret <= 0) {
               LOGE("Failed to read from rild %d socket, closing...", i);
@@ -269,7 +264,9 @@ int main(int argc, char **argv) {
         }
       }
     }
-    close(rild_rw);
+    for (i = 0; i < NUM_RILD; i++) {
+      close(rild_rw[i]);
+    }
     close(rilproxy_rw);
   }
   return 0;
