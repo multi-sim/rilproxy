@@ -246,21 +246,16 @@ int main(int argc, char **argv) {
           fds[i + 1].revents = 0;
           while(1) {
             // add index
-//            memcpy(data, &i, 4);
             data[0] = 0;
             data[1] = 0;
             data[2] = 0;
             data[3] = i;
-            LOGD("rild_rw %d data[0]=%d, data[1]=%d data[2]=%d data[3]=%d", i, data[0], data[1], data[2], data[3]);
             ret = read(rild_rw[i], &data[HEADER_SIZE], 1024);
             if(ret > 0) {
-              // add dataSize
-//              memcpy(&data[INDEX_SIZE], &ret, 4);
               data[4] = (ret >> 24) & 0xff;
               data[5] = (ret >> 16) & 0xff;
               data[6] = (ret >> 8) & 0xff;
               data[7] =  ret & 0xff;
-              LOGD("rild_rw %d ret = %d, data[4]=%d, data[5]=%d data[6]=%d data[7]=%d", i, ret, data[4], data[5], data[6], data[7]);
               writeToSocket(rilproxy_rw, data, ret + HEADER_SIZE);
             }
             else if (ret <= 0) {
