@@ -64,9 +64,9 @@ const int NUM_RILD = sizeof(RILD_SOCKET_NAMES) / sizeof(char*);
 #include <utils/Log.h>
 #include <cutils/sockets.h>
 
-static const int INDEX_SIZE = 1;
+static const int INDEX_SIZE = 4;
 static const int DATA_SIZE = 4;
-static const int HEADER_SIZE = 5; // INDEX_SIZE + DATA_SIZE
+static const int HEADER_SIZE = 8; // INDEX_SIZE + DATA_SIZE
 
 void switchUser() {
   prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0);
@@ -223,8 +223,10 @@ int main(int argc, char **argv) {
         {
           ret = read(rilproxy_rw, data, 1024 + INDEX_SIZE);
           if(ret > 0) {
-            int index = data[0];
-            writeToSocket(rild_rw[index], &data[1], ret - 1); // -1 for index
+            int index;
+            memcpy(&index, data, 4);
+            LOGD("rilproxy_rw, index = %d",index);
+            writeToSocket(rild_rw[index], &data[INDEX_SIZE], ret - INDEX_SIZE);
           }
           else if (ret <= 0)
           {
@@ -243,13 +245,22 @@ int main(int argc, char **argv) {
         {
           fds[i + 1].revents = 0;
           while(1) {
-            data[0] = i; // Attach index to data.
+            // add index
+//            memcpy(data, &i, 4);
+            data[0] = 0;
+            data[1] = 0;
+            data[2] = 0;
+            data[3] = i;
+            LOGD("rild_rw %d data[0]=%d, data[1]=%d data[2]=%d data[3]=%d", i, data[0], data[1], data[2], data[3]);
             ret = read(rild_rw[i], &data[HEADER_SIZE], 1024);
             if(ret > 0) {
-              data[1] = (ret >> 24) & 0xff;
-              data[2] = (ret >> 16) & 0xff;
-              data[3] = (ret >> 8) & 0xff;
-              data[4] =  ret & 0xff;
+              // add dataSize
+//              memcpy(&data[INDEX_SIZE], &ret, 4);
+              data[4] = (ret >> 24) & 0xff;
+              data[5] = (ret >> 16) & 0xff;
+              data[6] = (ret >> 8) & 0xff;
+              data[7] =  ret & 0xff;
+              LOGD("rild_rw %d ret = %d, data[4]=%d, data[5]=%d data[6]=%d data[7]=%d", i, ret, data[4], data[5], data[6], data[7]);
               writeToSocket(rilproxy_rw, data, ret + HEADER_SIZE);
             }
             else if (ret <= 0) {
