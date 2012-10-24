@@ -223,8 +223,10 @@ int main(int argc, char **argv) {
         {
           ret = read(rilproxy_rw, data, 1024 + INDEX_SIZE);
           if(ret > 0) {
-            int index;
-            memcpy(&index, data, 4);
+            int index = data[0] << 24 |
+                        data[1] << 16 |
+                        data[2] << 8 |
+                        data[3];
             LOGD("rilproxy_rw, index = %d",index);
             writeToSocket(rild_rw[index], &data[INDEX_SIZE], ret - INDEX_SIZE);
           }
@@ -245,7 +247,6 @@ int main(int argc, char **argv) {
         {
           fds[i + 1].revents = 0;
           while(1) {
-            // add index
             data[0] = 0;
             data[1] = 0;
             data[2] = 0;
