@@ -64,9 +64,9 @@ const int NUM_RILD = sizeof(RILD_SOCKET_NAMES) / sizeof(char*);
 #include <utils/Log.h>
 #include <cutils/sockets.h>
 
-static const int INDEX_SIZE = 4;
+static const int SUB_ID_SIZE = 4;
 static const int DATA_SIZE = 4;
-static const int HEADER_SIZE = 8; // INDEX_SIZE + DATA_SIZE
+static const int HEADER_SIZE = 8; // SUB_ID_SIZE + DATA_SIZE
 
 void switchUser() {
   prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0);
@@ -221,11 +221,11 @@ int main(int argc, char **argv) {
         fds[0].revents = 0;
         while(1)
         {
-          ret = read(rilproxy_rw, data, 1024 + INDEX_SIZE);
+          ret = read(rilproxy_rw, data, 1024 + SUB_ID_SIZE);
           if(ret > 0) {
-            int index = data[0] << 24 | data[1] << 16 | data[2] << 8 | data[3];
-            LOGD("rilproxy_rw, index = %d",index);
-            writeToSocket(rild_rw[index], &data[INDEX_SIZE], ret - INDEX_SIZE);
+            int subId = data[0] << 24 | data[1] << 16 | data[2] << 8 | data[3];
+            LOGD("rilproxy_rw, subId = %d",subId);
+            writeToSocket(rild_rw[subId], &data[SUB_ID_SIZE], ret - SUB_ID_SIZE);
           }
           else if (ret <= 0)
           {
