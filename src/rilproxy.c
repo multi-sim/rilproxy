@@ -36,8 +36,6 @@
  * the terms of any one of the MPL, the GPL or the LGPL.
  *
  * ***** END LICENSE BLOCK ***** */
-
-#define RILD_SOCKET_NAME       "rild"
 #define RILPROXY_SOCKET_NAME   "rilproxy"
 #define RILPROXYD_SOCKET_NAME  "rilproxyd"
 #define RILPROXYD_TRIGGER_FILE "/data/local/rilproxyd"
@@ -55,7 +53,11 @@
 #define LOG_TAG "RILPROXY"
 #include <utils/Log.h>
 #include <cutils/sockets.h>
+#include "rilproxy.h"
 
+static const int SUB_ID_SIZE = 4;
+static const int DATA_SIZE = 4;
+static const int HEADER_SIZE = 8; // SUB_ID_SIZE + DATA_SIZE
 
 void switchUser() {
   prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0);
@@ -97,8 +99,7 @@ writeToSocket(int fd, const void *buffer, size_t len) {
 }
 
 int main(int argc, char **argv) {
-
-  int rild_rw;
+  int rild_rw[NUM_RILD];
   int rilproxy_conn;
   int ret;
   char* rilproxy_socket;
@@ -172,41 +173,49 @@ int main(int argc, char **argv) {
     LOGD("Socket connected");
     connected = 1;
 
-    while(1) {
-      LOGD("Connecting to socket %s\n", RILD_SOCKET_NAME);
-      rild_rw = socket_local_client(
-        RILD_SOCKET_NAME,
-        ANDROID_SOCKET_NAMESPACE_RESERVED,
-        SOCK_STREAM );
-      if (rild_rw >= 0) {
-        break;
+    int i;
+    for (i = 0; i < NUM_RILD; i++) {
+      while(1) {
+        LOGD("Connecting to socket %s\n", RILD_SOCKET_NAMES[i]);
+        rild_rw[i] = socket_local_client(
+          RILD_SOCKET_NAMES[i],
+          ANDROID_SOCKET_NAMESPACE_RESERVED,
+          SOCK_STREAM);
+        if (rild_rw[i] >= 0) {
+          break;
+        }
+        LOGE("Could not connect to %s socket, retrying: %s\n",
+             RILD_SOCKET_NAMES[i], strerror(errno));
+        sleep(1);
       }
-      LOGE("Could not connect to %s socket, retrying: %s\n",
-           RILD_SOCKET_NAME, strerror(errno));
-      sleep(1);
+      LOGD("Connected to socket %s\n", RILD_SOCKET_NAMES[i]);
     }
-    LOGD("Connected to socket %s\n", RILD_SOCKET_NAME);
-    char data[1024];
 
-    struct pollfd fds[2];
+    char data[1024 + HEADER_SIZE];
+    struct pollfd fds[NUM_RILD + 1];
     fds[0].fd = rilproxy_rw;
     fds[0].events = POLLIN;
     fds[0].revents = 0;
-    fds[1].fd = rild_rw;
-    fds[1].events = POLLIN;
-    fds[1].revents = 0;
 
+    for (i = 0; i < NUM_RILD; i++) {
+      fds[i + 1].fd = rild_rw[i];
+      fds[i + 1].events = POLLIN;
+      fds[i + 1].revents = 0;
+    }
+
+    //TODO 'connected' condition for all rilds
     while(connected)
     {
-      poll(fds, 2, -1);
+      poll(fds, NUM_RILD + 1, -1);
       if(fds[0].revents > 0)
       {
         fds[0].revents = 0;
         while(1)
         {
-          ret = read(rilproxy_rw, data, 1024);
+          ret = read(rilproxy_rw, data, 1024 + SUB_ID_SIZE);
           if(ret > 0) {
-            writeToSocket(rild_rw, data, ret);
+            int subId = data[0] << 24 | data[1] << 16 | data[2] << 8 | data[3];
+            writeToSocket(rild_rw[subId], &data[SUB_ID_SIZE], ret - SUB_ID_SIZE);
           }
           else if (ret <= 0)
           {
@@ -220,26 +229,38 @@ int main(int argc, char **argv) {
           }
         }
       }
-      if(fds[1].revents > 0)
-      {
-        fds[1].revents = 0;
-        while(1) {
-          ret = read(rild_rw, data, 1024);
-          if(ret > 0) {
-            writeToSocket(rilproxy_rw, data, ret);
-          }
-          else if (ret <= 0) {
-            LOGE("Failed to read from rild socket, closing...");
-            connected = 0;
-            break;
-          }
-          if(ret < 1024) {
-            break;
+      for (i = 0; i < NUM_RILD; i++) {
+        if(fds[i + 1].revents > 0)
+        {
+          fds[i + 1].revents = 0;
+          while(1) {
+            data[0] = (i >> 24) & 0xff;
+            data[1] = (i >> 16) & 0xff;
+            data[2] = (i >> 8) & 0xff;
+            data[3] =  i & 0xff;
+            ret = read(rild_rw[i], &data[HEADER_SIZE], 1024 + HEADER_SIZE);
+            if(ret > 0) {
+              data[4] = (ret >> 24) & 0xff;
+              data[5] = (ret >> 16) & 0xff;
+              data[6] = (ret >> 8) & 0xff;
+              data[7] =  ret & 0xff;
+              writeToSocket(rilproxy_rw, data, ret + HEADER_SIZE);
+            }
+            else if (ret <= 0) {
+              LOGE("Failed to read from rild %d socket, closing...", i);
+              connected = 0;
+              break;
+            }
+            if(ret < 1024) {
+              break;
+            }
           }
         }
       }
     }
-    close(rild_rw);
+    for (i = 0; i < NUM_RILD; i++) {
+      close(rild_rw[i]);
+    }
     close(rilproxy_rw);
   }
   return 0;
